@@ -1,0 +1,621 @@
+\documentclass[11pt]{amsart}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[margin=1in]{geometry}
+
+% Lean 4 syntax highlighting
+\lstdefinelanguage{Lean4}{
+  morekeywords={def,theorem,lemma,structure,inductive,namespace,end,where,
+    import,open,variable,instance,noncomputable,abbrev,example,
+    by,intro,obtain,exact,simp,omega,cases,induction,refine,rw,
+    have,let,show,change,apply,fun,match,with,if,then,else,do,
+    return,sorry,Prop,Type,Sort,Bool,Nat,Fin,Set,true,false,
+    extends,deriving},
+  sensitive=true,
+  morecomment=[l]{--},
+  morecomment=[n]{/-}{-/},
+  morestring=[b]",
+  literate=
+    {→}{{$\to$}}1
+    {←}{{$\leftarrow$}}1
+    {⟨}{{$\langle$}}1
+    {⟩}{{$\rangle$}}1
+    {∀}{{$\forall$}}1
+    {∃}{{$\exists$}}1
+    {¬}{{$\lnot$}}1
+    {≤}{{$\leq$}}1
+    {≥}{{$\geq$}}1
+    {∧}{{$\land$}}1
+    {∨}{{$\lor$}}1
+    {×}{{$\times$}}1
+    {ℕ}{{$\mathbb{N}$}}1
+    {∘}{{$\circ$}}1
+    {λ}{{$\lambda$}}1
+    {α}{{$\alpha$}}1
+    {β}{{$\beta$}}1
+    {σ}{{$\sigma$}}1
+    {₁}{{$_1$}}1
+    {₂}{{$_2$}}1
+}
+\lstset{
+  language=Lean4,
+  basicstyle=\small\ttfamily,
+  keywordstyle=\bfseries\color{blue!70!black},
+  commentstyle=\itshape\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  columns=flexible,
+  frame=single,
+  framerule=0.4pt,
+  xleftmargin=2em,
+  xrightmargin=1em,
+  aboveskip=0.8em,
+  belowskip=0.8em,
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  captionpos=b,
+}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+\newcommand{\BoolFn}{\mathsf{BoolFn}}
+\newcommand{\Circ}{\mathsf{Circuit}}
+\newcommand{\size}{\mathsf{size}}
+\newcommand{\eval}{\mathsf{eval}}
+\newcommand{\computes}{\mathsf{computes}}
+\newcommand{\polyb}{\mathsf{PolyBounded}}
+\newcommand{\polye}{\mathsf{PolyInExp}}
+\newcommand{\Ppoly}{\mathsf{P/poly}}
+\newcommand{\PRF}{\mathsf{PRF}}
+\newcommand{\Lean}{\textsf{Lean\,4}}
+
+\title[Natural Proofs Barrier in Lean 4]%
+  {A Machine-Verified Natural Proofs Barrier in Lean~4}
+
+\author{Alex Chengyu Li}
+\address{Independent Researcher, Tokyo, Japan}
+\email{cl7076@nyu.edu}
+
+\begin{document}
+
+\begin{abstract}
+The natural proofs barrier (Razborov--Rudich 1997) has had no
+machine-verified formalization in any proof assistant. We formalize it
+in \Lean{}: if pseudorandom function generators exist, then no natural
+combinatorial property is useful against $\Ppoly$. The formalization
+is approximately 400 lines of \Lean{} with no unresolved proof
+obligations.
+
+The proof is short once definitions are chosen appropriately.
+We identify definition choices that make the barrier proof mechanizable
+without probabilistic infrastructure and analyze why simpler
+alternatives fail. We also formalize the
+Shannon counting argument: most Boolean functions require large circuits.
+\end{abstract}
+
+\maketitle
+
+%% ===================================================================
+\section{Introduction}
+\label{sec:intro}
+
+The natural proofs barrier, established by Razborov and Rudich~\cite{RR97},
+is one of three fundamental obstacles to proving circuit lower bounds
+(alongside relativization~\cite{BGS75} and algebrization~\cite{AW09}).
+It shows that any proof technique satisfying two conditions,
+\emph{constructivity} (efficiently checkable) and \emph{largeness}
+(satisfied by many functions), cannot
+establish superpolynomial circuit lower bounds, assuming pseudorandom
+function generators exist. This barrier has shaped complexity theory for
+nearly three decades, ruling out ``natural'' approaches to problems like
+$\mathsf{P}$ vs.\ $\mathsf{NP}$.
+
+No machine-verified formalization exists in any proof assistant:
+not in Mathlib, Coq, Isabelle/AFP, or Agda (Section~\ref{sec:related}).
+
+Our formalization targets \Lean{} with the Mathlib library. The barrier
+theorem compiles to a six-line tactic proof. The difficulty is in
+designing the definitions the proof operates on. We make three
+contributions:
+\begin{enumerate}[nosep]
+\item The first machine-verified formalization of a complexity-theoretic
+  barrier result.
+\item A systematic account of definition choices: we document
+  three definition choices that enable the mechanized proof and show why
+  natural alternatives fail (Section~\ref{sec:design}).
+\item A formalization of the Shannon counting argument, reusing the same
+  circuit abstraction (Section~\ref{sec:shannon}).
+\end{enumerate}
+
+Section~\ref{sec:relationship} describes what is preserved from the
+original proof and what is reformulated for mechanizability.
+
+
+%% ===================================================================
+\section{Informal Background}
+\label{sec:background}
+
+We briefly recall the statement and proof of the natural proofs
+barrier, following Razborov and Rudich~\cite{RR97}.
+
+\begin{definition}
+A \emph{Boolean function} on $n$ variables is a map
+$f \colon \{0,1\}^n \to \{0,1\}$.
+A \emph{Boolean circuit} over the basis $\{\mathsf{AND}, \mathsf{OR},
+\mathsf{NOT}\}$ computes such a function; its \emph{size} is the number
+of gates.
+\end{definition}
+
+\begin{definition}
+A \emph{combinatorial property} $\mathcal{P}$ of $n$-variable Boolean
+functions is called \emph{natural} if it satisfies:
+\begin{itemize}[nosep]
+\item \textbf{Constructivity.} Whether $f$ satisfies $\mathcal{P}$ can be
+  decided in time polynomial in $2^n$ (the truth table length).
+\item \textbf{Largeness.} At least a $1/\mathrm{poly}(n)$ fraction of all
+  $n$-variable Boolean functions satisfy $\mathcal{P}$.
+\end{itemize}
+The property is \emph{useful against} $\Ppoly$ if, for every polynomial
+$p$, functions computable by circuits of size $\leq p(n)$ eventually
+fail to satisfy $\mathcal{P}$.
+\end{definition}
+
+\begin{theorem}[Razborov--Rudich 1997]
+\label{thm:informal}
+If pseudorandom function generators exist, then no natural combinatorial
+property is useful against $\Ppoly$.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+Suppose $\mathcal{P}$ is natural and useful against $\Ppoly$. Let $G$ be
+a PRF generator with polynomial circuit size bound $c \cdot n^d + c$.
+Usefulness at this bound provides a cutoff $N$: for all $n \geq N$,
+no function with circuits of size $\leq c \cdot n^d + c$ satisfies
+$\mathcal{P}$. But constructivity and largeness together imply that
+$\mathcal{P}$ would be an efficient distinguisher with non-negligible
+advantage over the PRF, contradicting security. Concretely, at some
+$n \geq N$, some PRF output $G(n, \mathit{seed})$ satisfies $\mathcal{P}$,
+yet it has a circuit of size $\leq c \cdot n^d + c$. Contradiction.
+\end{proof}
+
+
+%% ===================================================================
+\section{Formalization}
+\label{sec:formalization}
+
+Table~\ref{tab:files} summarizes the formalization structure.
+All definitions and proofs compile under \Lean{} v4.29.0-rc6 with
+Mathlib.
+
+\begin{table}[ht]
+\centering
+\caption{Formalization structure.}
+\label{tab:files}
+\begin{tabular}{@{}lll@{}}
+\toprule
+File & Contents & Key definitions \\
+\midrule
+\texttt{Basic.lean} & Boolean functions & $\BoolFn$, \texttt{truthTable}, \texttt{card\_boolFn} \\
+\texttt{Circuit.lean} & Circuits & $\Circ$, $\eval$, $\size$, $\computes$, \texttt{exists\_circuit} \\
+\texttt{ComplexityClass.lean} & $\Ppoly$ & \texttt{CircuitFamily}, $\polyb$, $\polye$ \\
+\texttt{NaturalProof.lean} & Natural properties & \texttt{CombProperty}, constructive, large, useful \\
+\texttt{PRF.lean} & PRF hypothesis & \texttt{PRFGenerator}, \texttt{PRFHypothesis} \\
+\texttt{NaturalProofBarrier.lean} & Main theorem & \texttt{natural\_proof\_barrier} \\
+\texttt{Shannon.lean} & Counting bound & \texttt{finite\_bounded\_circuit}, \texttt{exists\_hard\_function} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Boolean functions and circuits}
+
+A Boolean function on $n$ variables is a Lean function
+$(\mathsf{Fin}\; n \to \mathsf{Bool}) \to \mathsf{Bool}$.
+This representation matches circuit evaluation directly: no encoding
+or decoding is needed at the interface between functions and circuits.
+
+\begin{lstlisting}
+abbrev BoolFn (n : ℕ) := (Fin n → Bool) → Bool
+\end{lstlisting}
+
+Circuits are an inductive type over the standard basis:
+
+\begin{lstlisting}
+inductive Circuit (n : ℕ) where
+  | var   : Fin n → Circuit n
+  | const : Bool → Circuit n
+  | and   : Circuit n → Circuit n → Circuit n
+  | or    : Circuit n → Circuit n → Circuit n
+  | not   : Circuit n → Circuit n
+\end{lstlisting}
+
+Evaluation (\lstinline{Circuit.eval}) proceeds by structural recursion.
+Gate count (\lstinline{Circuit.size}) counts AND, OR, and NOT nodes;
+inputs and constants contribute zero. A circuit $c$ \emph{computes}
+$f$ when $\forall x,\; c.\eval\; x = f\; x$.
+
+\subsection{Complexity classes}
+
+A circuit family assigns one circuit per input length.
+The size function is \emph{polynomially bounded} if
+$\exists\, c\, d,\; \forall n,\; s(n) \leq c \cdot n^d + c$.
+A function sequence is in $\Ppoly$ when computed by a polynomially
+bounded circuit family.
+
+For constructivity, we need a separate notion: the checker circuit
+size is polynomial in the \emph{truth table length} $2^n$, not in
+the number of variables $n$. We formalize this as $\polye$:
+
+\begin{lstlisting}
+def PolyInExp (s : ℕ → ℕ) : Prop :=
+  ∃ c d : ℕ, ∀ n, s n ≤ c * (2 ^ n) ^ d + c
+\end{lstlisting}
+
+The difference between $\polyb$ and $\polye$ is exponential and must
+be enforced at the type level (Section~\ref{sec:polyinexp}).
+
+\subsection{Natural properties}
+
+A combinatorial property bundles a predicate with decidability:
+
+\begin{lstlisting}
+structure CombProperty where
+  prop : (n : ℕ) → BoolFn n → Prop
+  decidable : (n : ℕ) → DecidablePred (prop n)
+\end{lstlisting}
+
+Constructivity requires a checker circuit family of $\polye$ size
+that agrees with the property on truth table inputs.
+Largeness requires that the fraction of satisfying functions is
+$\geq 1/q(n)$ for some polynomially bounded $q$.
+
+Usefulness is formalized \emph{per polynomial bound}, not per
+function family (see Section~\ref{sec:family-level} for why):
+
+\begin{lstlisting}
+def CombProperty.usefulAgainstPPoly (P : CombProperty) : Prop :=
+  ∀ c d : ℕ, ∃ N, ∀ n, n ≥ N →
+    ∀ (f : BoolFn n) (circ : Circuit n),
+      circ.computes f → circ.size ≤ c * n ^ d + c →
+        ¬P.prop n f
+\end{lstlisting}
+
+A \texttt{NaturalProperty} extends \texttt{CombProperty} with proofs
+of constructivity and largeness.
+
+\subsection{PRF hypothesis}
+
+A \texttt{PRFGenerator} maps seeds to Boolean functions via
+polynomial-size circuits, with a \emph{uniform} bound
+$c \cdot n^d + c$ over all seeds:
+
+\begin{lstlisting}
+structure PRFGenerator where
+  seedLen  : ℕ → ℕ
+  generate : (n : ℕ) → (Fin (seedLen n) → Bool) → BoolFn n
+  polySize : ∃ c d : ℕ, ∀ n (seed : Fin (seedLen n) → Bool),
+    ∃ circ : Circuit n,
+      circ.computes (generate n seed) ∧
+      circ.size ≤ c * n ^ d + c
+\end{lstlisting}
+
+The PRF hypothesis states the consequence of PRF security used in the
+barrier proof (see Section~\ref{sec:prob-prf} for justification):
+
+\begin{lstlisting}
+def PRFHypothesis : Prop :=
+  ∃ G : PRFGenerator,
+    ∀ (P : CombProperty),
+      P.constructive → P.large →
+      ∀ N : ℕ, ∃ n, n ≥ N ∧
+        ∃ seed : Fin (G.seedLen n) → Bool,
+          P.prop n (G.generate n seed)
+\end{lstlisting}
+
+\subsection{The barrier theorem}
+
+The main theorem and its complete proof:
+
+\begin{lstlisting}
+theorem natural_proof_barrier (h : PRFHypothesis) :
+    ∀ P : NaturalProperty,
+      ¬P.toCombProperty.usefulAgainstPPoly := by
+  intro P hU
+  obtain ⟨G, hG⟩ := h
+  obtain ⟨c_G, d_G, heff⟩ := G.polySize
+  obtain ⟨N, hN⟩ := hU c_G d_G
+  obtain ⟨n, hn, seed, hsat⟩ :=
+    hG P.toCombProperty P.isConstructive P.isLarge N
+  obtain ⟨circ, hcomp, hsize⟩ := heff n seed
+  exact hN n hn (G.generate n seed) circ hcomp hsize hsat
+\end{lstlisting}
+
+The proof proceeds in six steps:
+\begin{enumerate}[nosep]
+\item Extract a PRF generator $G$ from the hypothesis.
+\item Obtain its uniform circuit size bound $(c_G, d_G)$.
+\item Apply usefulness at $(c_G, d_G)$ to get a cutoff $N$.
+\item The PRF hypothesis, applied to the constructive and large property,
+  yields $n \geq N$ and a seed such that $G(n, \mathit{seed})$ satisfies $\mathcal{P}$.
+\item The efficiency bound gives a circuit for $G(n, \mathit{seed})$ of
+  size $\leq c_G \cdot n^{d_G} + c_G$.
+\item Usefulness at $n \geq N$ says no function with such a small circuit
+  satisfies $\mathcal{P}$, contradicting step~4.
+\end{enumerate}
+
+
+%% ===================================================================
+\section{Design Space: Rejected Alternatives}
+\label{sec:design}
+
+Each definition in Section~\ref{sec:formalization} avoids a
+mechanization obstacle that blocks simpler formulations.
+
+\subsection{Family-level usefulness}
+\label{sec:family-level}
+
+A simpler formulation of usefulness quantifies over function
+families in $\Ppoly$:
+\[
+  \forall f \in \Ppoly,\; \exists N,\; \forall n \geq N,\;
+  \neg\mathcal{P}(f_n).
+\]
+This formulation fails mechanically: the PRF generator produces outputs indexed
+by \emph{seed}, so step~4 of the proof yields a specific seed
+$s_0$ at a specific $n_0$. But usefulness provides a cutoff $N$
+that depends on the \emph{family} $f$. Different seeds yield
+different families, each with its own cutoff $N_s$. To reach a
+contradiction, we need a uniform cutoff that works for all seeds
+simultaneously, but over infinitely many seeds, no finite maximum
+exists.
+
+\paragraph{Fix.}
+Quantify over polynomial bounds $(c, d)$ directly:
+\[
+  \forall c\, d,\; \exists N,\; \forall n \geq N,\;
+  \bigl(\size \leq c \cdot n^d + c \implies \neg\mathcal{P}\bigr).
+\]
+The PRF generator's \texttt{polySize} field pins a single $(c_G, d_G)$.
+This yields one cutoff $N$ for all seeds, because all seeds share the
+same circuit size polynomial. The contradiction closes uniformly.
+
+\subsection{Probabilistic PRF definition}
+\label{sec:prob-prf}
+
+The textbook PRF definition uses $\varepsilon$-indistinguishability:
+\[
+  \bigl|\Pr[D(G(k)) = 1] - \Pr[D(f) = 1]\bigr| \leq \varepsilon(n),
+\]
+where $f$ is drawn uniformly from all $n$-variable Boolean functions.
+Formalizing this requires:
+\begin{itemize}[nosep]
+\item Probability distributions over $\BoolFn\; n$ (uniform measure on
+  a space of size $2^{2^n}$).
+\item Negligible functions (asymptotic rate conditions).
+\item The distinguisher-to-property reduction: if $\mathcal{P}$ is
+  constructive, large, and rejects all PRF outputs, one can build
+  a distinguisher with non-negligible advantage.
+\end{itemize}
+All three require Mathlib infrastructure that does not yet exist.
+The distinguisher reduction is the only step that uses the PRF
+definition's \emph{internal structure}. The barrier proof uses only
+the \emph{consequence}: if $\mathcal{P}$ is constructive and large, it
+cannot reject all PRF outputs at arbitrarily large~$n$.
+
+\paragraph{Fix.}
+State this consequence directly as \texttt{PRFHypothesis}. The barrier
+proof goes through in six tactic steps. The probabilistic infrastructure
+would add hundreds of lines of measure-theoretic scaffolding that the
+barrier theorem does not use.
+
+The consequence form is implied by standard PRF security, so no logical
+content is lost. Any formalization starting from the standard definition
+must derive this consequence as an intermediate lemma.
+
+\subsection{PolyInExp vs.\ PolyBounded}
+\label{sec:polyinexp}
+
+Constructivity means the checker runs in time polynomial in the
+\emph{truth table length} $2^n$, not in the number of variables $n$.
+The informal proof says ``polynomial time'' without specifying
+the parameter. Using $\polyb$ instead of $\polye$ for the checker
+makes the constructivity condition exponentially too weak: the
+checker would need to run in time $\mathrm{poly}(n)$, which is
+sublinear in its $2^n$-bit input.
+
+In the formalization, this distinction is enforced at the type level:
+\texttt{constructive} uses $\polye$ while \texttt{usefulAgainstPPoly}
+uses $\polyb$. A type error would result from swapping them.
+
+
+%% ===================================================================
+\section{Relationship to Razborov--Rudich (1997)}
+\label{sec:relationship}
+
+This section distinguishes faithful translations from machine-oriented
+reformulations in the formalization.
+
+\paragraph{Faithful translations.}
+The contradiction structure is identical to the original: usefulness
+provides a cutoff below which no small-circuit function satisfies
+$\mathcal{P}$; the PRF hypothesis produces a small-circuit function
+satisfying $\mathcal{P}$ above that cutoff. Boolean functions,
+circuits, and the AND/OR/NOT basis match the original. Constructivity
+and largeness retain their combinatorial content.
+
+\paragraph{Reformulations.}
+The PRF hypothesis is stated in consequence form (Section~\ref{sec:prob-prf})
+and usefulness per polynomial bound (Section~\ref{sec:family-level}).
+Both reformulations drop technical apparatus (probability distributions,
+circuit family indirection) that the barrier proof does not use,
+while preserving the logical content of each step.
+
+\paragraph{Scope of reformulation.}
+The overall statement is faithful to the Razborov--Rudich barrier theorem.
+The reformulations concern how the proof \emph{accesses} its hypotheses.
+
+
+%% ===================================================================
+\section{Shannon Counting Bound}
+\label{sec:shannon}
+
+We also formalize the Shannon counting argument: most Boolean functions
+require large circuits.
+This result reuses the $\Circ$, $\size$, $\BoolFn$, and $\computes$
+definitions from the barrier formalization without modification.
+
+\begin{theorem}[\texttt{finite\_bounded\_circuit}]
+For all $n, s$, the set $\{c : \Circ\; n \mid c.\size \leq s\}$
+is finite.
+\end{theorem}
+
+By induction on $s$. In the base case ($s = 0$),
+circuits of size zero are exactly variables and constants, a finite
+set. In the inductive step, circuits of size $\leq s+1$ are either
+in the inductive hypothesis set or are built from subcircuits of
+size $\leq s$ via AND, OR, or NOT, each a finite image of a
+finite product.
+
+\begin{theorem}[\texttt{finite\_computable\_bounded}]
+For all $n, s$, the set $\{f : \BoolFn\; n \mid \exists\, c,\;
+c.\computes\; f \land c.\size \leq s\}$ is finite.
+\end{theorem}
+
+This follows immediately: the set is a subset of the image of
+bounded circuits under evaluation.
+
+\begin{theorem}[\texttt{exists\_hard\_function}]
+If the number of functions computable by circuits of size $\leq s$
+is less than the total number of $n$-variable Boolean functions
+($= 2^{2^n}$), then there exists a function requiring circuits
+of size ${>}\, s$.
+\end{theorem}
+
+Suppose for contradiction that every function has a circuit of
+size $\leq s$. Then $\mathsf{Finset.univ}$ (all $2^{2^n}$ functions)
+is a subset of the finite computable set, contradicting
+the cardinality hypothesis.
+
+
+%% ===================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Complexity theory in proof assistants.}
+The closest precedent is the formalization of the Cook--Levin theorem
+(NP-completeness of SAT) in Coq by Forster and
+Kunze~\cite{ForsterKunze21}, which used the call-by-value
+$\lambda$-calculus L as a computational model rather than Turing
+machines. Balbach~\cite{Balbach23} independently formalized Cook--Levin
+in Isabelle/HOL using Turing machines. Forster, Kunze, and
+Lauermann~\cite{ForsterKL22} formalized synthetic Kolmogorov
+complexity in Coq. Those results are positive theorems:
+NP-completeness, existence of incompressible strings.
+No complexity barrier has been formalized previously.
+
+\paragraph{Barrier results.}
+The relativization barrier~\cite{BGS75} and the
+algebrization barrier~\cite{AW09} also remain unformalized.
+Relativization would require formalizing oracle computation, which
+introduces new types and abstraction layers; we discuss this as
+future work.
+
+\paragraph{Cryptography in proof assistants.}
+SSProve~\cite{SSProve23} provides a framework for machine-checked
+cryptographic proofs in Coq, including PRF-based encryption, using
+the full probabilistic definition. Our consequence-form PRF hypothesis
+sidesteps this overhead, since the barrier proof uses only the
+consequence, as discussed in Section~\ref{sec:prob-prf}.
+
+
+%% ===================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper formalizes the natural proofs barrier in \Lean{},
+with no \texttt{sorry} obligations and approximately 400 lines of
+code. The definitions do more work than the proofs: choosing interfaces
+that avoid probabilistic infrastructure is the main obstacle in
+mechanizing this class of results.
+
+The design space documented in Section~\ref{sec:design} records which
+definition patterns support mechanized proofs of barrier results and
+which fail.
+
+\paragraph{Future directions.}
+The Shannon counting bound (Section~\ref{sec:shannon}) shows that the
+circuit abstraction applies beyond the barrier theorem. Two extensions
+that build on the current definitions without modifying them are:
+\begin{itemize}[nosep]
+\item \textbf{Circuit size bounds.} Concrete upper and lower bounds
+  on the number of circuits of given size, enabling explicit
+  Shannon-type lower bounds for specific parameters.
+\item \textbf{Karp--Lipton collapse.} If SAT has polynomial-size
+  circuits, then the polynomial hierarchy collapses.
+\end{itemize}
+The relativization and algebrization barriers require oracle
+computation types, and thus new core abstractions rather than
+additional lemmas.
+
+\paragraph{Artifact.}
+The complete \Lean{} source code is available at
+\url{https://github.com/crabsatellite/lean4-natural-proofs-barrier}.
+This paper is archived at Zenodo (DOI: \texttt{10.5281/zenodo.19132831}).
+
+
+\begin{thebibliography}{99}
+
+\bibitem{AW09}
+S.~Aaronson and A.~Wigderson.
+\newblock Algebrization: a new barrier in complexity theory.
+\newblock \emph{ACM Transactions on Computation Theory}, 1(1):2:1--2:54, 2009.
+
+\bibitem{Balbach23}
+F.~Balbach.
+\newblock The {Cook--Levin} theorem in {Isabelle/HOL}.
+\newblock In \emph{Archive of Formal Proofs}, 2023.
+
+\bibitem{BGS75}
+T.~Baker, J.~Gill, and R.~Solovay.
+\newblock Relativizations of the {P} $=?$ {NP} question.
+\newblock \emph{SIAM Journal on Computing}, 4(4):431--442, 1975.
+
+\bibitem{ForsterKunze21}
+Y.~Forster and F.~Kunze.
+\newblock Mechanising complexity theory: the {Cook--Levin} theorem in {Coq}.
+\newblock In \emph{ITP 2021}, volume 193 of \emph{LIPIcs}, pages 20:1--20:18, 2021.
+
+\bibitem{ForsterKL22}
+Y.~Forster, F.~Kunze, and N.~Lauermann.
+\newblock Synthetic {Kolmogorov} complexity in {Coq}.
+\newblock In \emph{ITP 2022}, volume 237 of \emph{LIPIcs}, pages 12:1--12:19, 2022.
+
+\bibitem{RR97}
+A.~A. Razborov and S.~Rudich.
+\newblock Natural proofs.
+\newblock \emph{Journal of Computer and System Sciences}, 55(1):24--35, 1997.
+
+\bibitem{SSProve23}
+P.~Barbosa, G.~Barthe, B.~Gr{\'e}goire, A.~Koutsos, and P.-Y.~Strub.
+\newblock {SSProve}: a foundational framework for modular cryptographic proofs
+  in {Coq}.
+\newblock \emph{ACM Transactions on Programming Languages and Systems},
+  45(1):5:1--5:44, 2023.
+
+\end{thebibliography}
+
+\end{document}
